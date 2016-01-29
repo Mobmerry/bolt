@@ -1,0 +1,11 @@
+[package]
+name = "bolt"
+version = "0.1.0"
+authors = ["Nitin Misra <nitin.misra23@gmail.com>"]
+
+[lib]
+name = "bolt"
+crate-type = ["dylib"]
+
+[dependencies]
+libc = "0.1.10"
