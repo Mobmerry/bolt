@@ -1,27 +1,96 @@
-extern crate libc;
+#[macro_use(bson, doc)]
+extern crate bson;
+extern crate mongodb;
+extern crate crypto;
+extern crate dotenv;
 
-use std::ffi::CStr;
 use std::fs;
+use std::env;
 use std::process::Command;
 use std::thread;
 
-#[no_mangle]
-pub extern fn process(collection_name: *const libc::c_char, collection_id: *const libc::c_char, file_name: *const libc::c_char, new_file_name: *const libc::c_char) {
+use crypto::md5::Md5;
+use crypto::digest::Digest;
 
-  let collection_name: &str = unsafe { CStr::from_ptr(collection_name) }.to_str().unwrap();
-  let collection_id: &str   = unsafe { CStr::from_ptr(collection_id) }.to_str().unwrap();
-  let file_name: &str       = unsafe { CStr::from_ptr(file_name) }.to_str().unwrap();
-  let new_file_name: &str   = unsafe { CStr::from_ptr(new_file_name) }.to_str().unwrap();
+use dotenv::dotenv;
 
-  let tmp_dir_path = "/tmp/".to_string() + collection_name + "-" + collection_id;
+use mongodb::{Client, ThreadedClient};
+use mongodb::db::ThreadedDatabase;
+
+use bson::oid::ObjectId;
+
+fn main() {
+  println!("Booting BOLT...");
+
+  dotenv().ok();
+
+  let db_host = env::var("MONGO_HOST").unwrap();
+  let db_port = 27017; //env::var("MONGO_PORT").unwrap();
+  let db_name = env::var("DB_NAME").unwrap();
+  let collection_name = env::var("COLLECTION").unwrap();
+
+  println!("Connecting to DB - {:?}:{:?}", db_host, db_port);
+
+  let client = Client::connect(&*db_host, db_port)
+                      .ok()
+                      .expect("Failed to initialize client.");
+
+  let db = client.db(&*db_name);
+
+  let collection = db.collection(&*collection_name);
+
+  let cursor = collection.find(None, None).unwrap();
+
+  println!("Retrieving documents...");
+
+  for result in cursor {
+    if let Ok(item) = result {
+
+      let document_id = item.get_object_id("_id").unwrap().to_string();
+
+      println!("Starting for document - {:?}", document_id);
+
+      let orig_file_name = item.get("logo")
+                               .unwrap()
+                               .to_string()
+                               .replace("\"", "");
+
+      let mut hasher = Md5::new();
+
+      hasher.input_str(&*orig_file_name);
+
+      let new_file_name = hasher.result_str() + ".jpg";
+
+      hasher.reset();
+
+      process(&*document_id, &*orig_file_name, &*new_file_name);
+
+      let record_id = ObjectId::with_string(&*document_id).unwrap();
+
+      collection.update_one(
+        doc! { "_id" => record_id },
+        doc! { "$set" =>  { "logo" => new_file_name } },
+        None
+      ).expect("Failed to update document.");
+
+      println!("Done for document - {:?}", document_id);
+    }
+  }
+}
+
+fn process(document_id: &str, orig_file_name: &str, new_file_name: &str) {
+  let source_name = env::var("SOURCE").unwrap(); // Singularized name of the collection
+  let source_path = env::var("SOURCE_PATH").unwrap(); // path to the public uploads dir
+
+  let tmp_dir_path = "/tmp/".to_string() + &*source_name + "-" + document_id;
 
   match fs::create_dir(&tmp_dir_path) {
     Err(why) => println!("! {:?}", why.kind()),
     Ok(_) => {}
   }
 
-  let source_dir_path  = "/home/nitin/work/mobmerry/public/uploads/".to_string() + collection_name + "/" + collection_id;
-  let source_file_path = source_dir_path.clone().to_string() + "/" + file_name;
+  let source_dir_path  = source_path + &*source_name + "/" + document_id;
+  let source_file_path = source_dir_path.clone().to_string() + "/" + orig_file_name;
 
   copy_image_to_tmp_dir(&tmp_dir_path, &source_file_path, &new_file_name);
 
@@ -42,7 +111,6 @@ pub extern fn process(collection_name: *const libc::c_char, collection_id: *cons
   clear_source_dir(&source_dir_path);
   copy_images_to_source_dir(&source_dir_path, &tmp_dir_path);
   remove_tmp_dir(&tmp_dir_path);
-
 }
 
 fn resize_image(file_name: &str, tmp_dir_path: &str, size: &str, alias: &str) -> std::thread::JoinHandle<()> {
