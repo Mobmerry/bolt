@@ -80,6 +80,7 @@ fn resize_image(file_name: &str, tmp_dir_path: &str, size: &str, alias: &str) ->
            .arg(&file_name)
            .arg("-resize")
            .arg(&size)
+           .arg("-auto-orient")
            .arg("+profile")
            .arg("!icc,!xmp,*")
            .arg(&new_file_name)
