@@ -3,178 +3,118 @@ extern crate bson;
 extern crate mongodb;
 extern crate crypto;
 extern crate dotenv;
+extern crate docopt;
+extern crate rustc_serialize;
 
-use std::fs;
 use std::env;
-use std::process::Command;
-use std::thread;
+use std::process;
+use std::io::Write;
 
-use crypto::md5::Md5;
-use crypto::digest::Digest;
+use docopt::Docopt;
 
-use dotenv::dotenv;
+mod util;
+mod db;
+mod cmd;
+mod md5_hasher;
+mod file_util;
 
-use mongodb::{Client, ThreadedClient};
-use mongodb::db::ThreadedDatabase;
-
-use bson::oid::ObjectId;
-
-fn main() {
-  println!("Booting BOLT...");
-
-  dotenv().ok();
-
-  let db_host = env::var("MONGO_HOST").unwrap();
-  let db_port = 27017; //env::var("MONGO_PORT").unwrap();
-  let db_name = env::var("DB_NAME").unwrap();
-  let collection_name = env::var("COLLECTION").unwrap();
-
-  println!("Connecting to DB - {:?}:{:?}", db_host, db_port);
-
-  let client = Client::connect(&*db_host, db_port)
-                      .ok()
-                      .expect("Failed to initialize client.");
-
-  let db = client.db(&*db_name);
-
-  let collection = db.collection(&*collection_name);
-
-  let cursor = collection.find(None, None).unwrap();
-
-  println!("Retrieving documents...");
-
-  for result in cursor {
-    if let Ok(item) = result {
-
-      let document_id = item.get_object_id("_id").unwrap().to_string();
-
-      println!("Starting for document - {:?}", document_id);
-
-      let orig_file_name = item.get("logo")
-                               .unwrap()
-                               .to_string()
-                               .replace("\"", "");
-
-      let mut hasher = Md5::new();
-
-      hasher.input_str(&*orig_file_name);
-
-      let new_file_name = hasher.result_str() + ".jpg";
-
-      hasher.reset();
-
-      process(&*document_id, &*orig_file_name, &*new_file_name);
-
-      let record_id = ObjectId::with_string(&*document_id).unwrap();
-
-      collection.update_one(
-        doc! { "_id" => record_id },
-        doc! { "$set" =>  { "logo" => new_file_name } },
-        None
-      ).expect("Failed to update document.");
-
-      println!("Done for document - {:?}", document_id);
-    }
-  }
-}
-
-fn process(document_id: &str, orig_file_name: &str, new_file_name: &str) {
-  let source_name = env::var("SOURCE").unwrap(); // Singularized name of the collection
-  let source_path = env::var("SOURCE_PATH").unwrap(); // path to the public uploads dir
-
-  let tmp_dir_path = "/tmp/".to_string() + &*source_name + "-" + document_id;
-
-  match fs::create_dir(&tmp_dir_path) {
-    Err(why) => println!("! {:?}", why.kind()),
-    Ok(_) => {}
-  }
-
-  let source_dir_path  = source_path + &*source_name + "/" + document_id;
-  let source_file_path = source_dir_path.clone().to_string() + "/" + orig_file_name;
-
-  copy_image_to_tmp_dir(&tmp_dir_path, &source_file_path, &new_file_name);
-
-  let mut gm_operations = vec![];
-
-  gm_operations.push(resize_image(&new_file_name, &tmp_dir_path, "100x100", "thumb"));
-  gm_operations.push(resize_image(&new_file_name, &tmp_dir_path, "290x", "ldpi"));
-  gm_operations.push(resize_image(&new_file_name, &tmp_dir_path, "420x", "mdpi"));
-  gm_operations.push(resize_image(&new_file_name, &tmp_dir_path, "520x", "hdpi"));
-  gm_operations.push(resize_image(&new_file_name, &tmp_dir_path, "630x", "xhdpi"));
-  gm_operations.push(resize_image(&new_file_name, &tmp_dir_path, "1062x", "xxhdpi"));
-
-  for gm_operation in gm_operations {
-    // Wait for the thread to finish. Returns a result.
-    let _ = gm_operation.join();
-  }
-
-  clear_source_dir(&source_dir_path);
-  copy_images_to_source_dir(&source_dir_path, &tmp_dir_path);
-  remove_tmp_dir(&tmp_dir_path);
-}
-
-fn resize_image(file_name: &str, tmp_dir_path: &str, size: &str, alias: &str) -> std::thread::JoinHandle<()> {
-  let file_name     = file_name.clone().to_string();
-  let new_file_name = (alias.to_string() + "_" + &file_name).clone().to_string();
-  let tmp_dir_path  = tmp_dir_path.clone().to_string();
-  let size          = size.clone().to_string();
-
-  return thread::spawn(move || {
-    Command::new("gm")
-           .arg("convert")
-           .arg(&file_name)
-           .arg("-resize")
-           .arg(&size)
-           .arg("+profile")
-           .arg("!icc,!xmp,*")
-           .arg(&new_file_name)
-           .current_dir(&tmp_dir_path)
-           .output()
-           .unwrap_or_else(|e| { panic!("failed to execute process: {}", e) });
+macro_rules! wout {
+  ($($arg:tt)*) => ({
+    (writeln!(&mut ::std::io::stdout(), $($arg)*)).unwrap();
   });
 }
 
-fn clear_source_dir(source_dir_path: &str) {
-  let file_paths = fs::read_dir(&source_dir_path).unwrap();
+macro_rules! werr {
+  ($($arg:tt)*) => ({
+    (writeln!(&mut ::std::io::stderr(), $($arg)*)).unwrap();
+  });
+}
 
-  for file_path in file_paths {
-    match fs::remove_file(file_path.unwrap().path()) {
-      Err(why) => println!("Remove file failed! {:?}", why.kind()),
-      Ok(_) => {}
+macro_rules! fail {
+  ($e:expr) => (Err(::std::convert::From::from($e)));
+}
+
+macro_rules! command_list {
+  () => (
+"
+  help             Show command usage
+  store_locations  Recreate images for all store locations
+  stores           Recreate images for all stores
+  products         Recreate images for all products
+  buzz_messages    Recreate images for all buzz messages
+"
+  )
+}
+
+static USAGE: &'static str = concat!("
+Usage:
+  bolt <command> [<args>...]
+  bolt [options]
+
+Options:
+  --list        List all commands available.
+  -h, --help    Display this message
+  --version     Print version info and exit
+
+Commands:", command_list!());
+
+#[derive(RustcDecodable)]
+struct Args {
+  arg_command: Option<CliCommand>,
+  flag_list: bool,
+}
+
+fn main() {
+  let args: Args = Docopt::new(USAGE)
+                          .and_then(|d| d.options_first(true)
+                                         .version(Some(util::version()))
+                                         .decode())
+                          .unwrap_or_else(|e| e.exit());
+
+  if args.flag_list {
+    wout!(concat!("Installed commands:", command_list!()));
+    return;
+  }
+
+  match args.arg_command {
+    None => {
+      werr!(concat!(
+        "Please choose one of the following commands:",
+        command_list!()));
+      process::exit(0);
+    }
+    Some(cmd) => {
+      if cmd.run() {
+        process::exit(0);
+      } else {
+        werr!("Process failed with no error!");
+        process::exit(0);
+      }
     }
   }
 }
 
-fn copy_image_to_tmp_dir(tmp_dir_path: &str, source_file_path: &str, new_file_name: &str) {
-  let tmp_file_path = tmp_dir_path.to_string() + "/" + new_file_name;
-
-  match fs::copy(&source_file_path, &tmp_file_path) {
-    Err(why) => println!("Copy file failed! {:?}", why.kind()),
-    Ok(_) => {}
-  }
+#[derive(Debug, RustcDecodable)]
+enum CliCommand {
+  help,
+  store_locations,
+  stores,
+  products,
+  buzz_messages
 }
 
-fn copy_images_to_source_dir(source_dir_path: &str, tmp_dir_path: &str) {
-  let file_paths = fs::read_dir(&tmp_dir_path).unwrap();
+impl CliCommand {
+  fn run(self) -> bool {
+    let argv: Vec<_> = env::args().map(|v| v.to_owned()).collect();
+    let argv: Vec<_> = argv.iter().map(|s| &**s).collect();
+    let argv = &*argv;
 
-  for file_path in file_paths {
-    let unwrapped_file      = file_path.unwrap();
-    let unwrapped_file_name = unwrapped_file.file_name();
-    let unwrapped_file_path = unwrapped_file.path();
-
-    let file_name = unwrapped_file_name.to_str().unwrap();
-    let source_file_path = source_dir_path.to_string() + "/" + file_name;
-
-    match fs::copy(unwrapped_file_path, &source_file_path) {
-      Err(why) => println!("Copy file failed! {:?}", why.kind()),
-      Ok(_) => {}
+    match self {
+      CliCommand::help            => { wout!("{}", USAGE); true }
+      CliCommand::store_locations => cmd::store_locations::run(argv),
+      CliCommand::stores          => cmd::stores::run(argv),
+      CliCommand::products        => cmd::products::run(argv),
+      CliCommand::buzz_messages   => cmd::buzz_messages::run(argv)
     }
-  }
-}
-
-fn remove_tmp_dir(tmp_dir_path: &str) {
-  match fs::remove_dir_all(&tmp_dir_path) {
-    Err(why) => println!("Remove dir failed! {:?}", why.kind()),
-    Ok(_) => {}
   }
 }

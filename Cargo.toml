@@ -2,9 +2,16 @@
 name = "bolt"
 version = "0.1.0"
 authors = ["Nitin Misra <nitin.misra23@gmail.com>"]
+description = "Recreate image versions"
+homepage = "https://github.com/nitinstp23/bolt"
+repository = "https://github.com/nitinstp23/bolt"
+readme = "README.md"
+license = "Unlicense/MIT"
 
 [dependencies]
 bson = "*"
 mongodb = "*"
 rust-crypto = "*"
 dotenv = "*"
+docopt = "0.6"
+rustc-serialize = "*"
