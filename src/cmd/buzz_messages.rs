@@ -1,5 +1,6 @@
 use std::env;
 use mongodb::db::ThreadedDatabase;
+use mongodb::coll::options::WriteModel;
 use bson::oid::ObjectId;
 
 use db;
@@ -17,6 +18,7 @@ pub fn run(argv: &[&str]) -> bool {
   println!("Retrieving {:?}...", collection_name);
 
   let source_name = "buzz_message";
+  let mut bulk_operations = vec![];
 
   for result in cursor {
     if let Ok(item) = result {
@@ -45,14 +47,20 @@ pub fn run(argv: &[&str]) -> bool {
 
       let record_id = ObjectId::with_string(document_id).unwrap();
 
-      collection.update_one(
-        doc! { "_id" => record_id },
-        doc! { "$set" =>  { "image" => new_file_name } },
-        None
-      ).expect("Failed to update document.");
+      bulk_operations.push(WriteModel::UpdateOne {
+        filter: doc! { "_id"  => record_id },
+        update: doc! { "$set" =>  { "image" => new_file_name } },
+        upsert: false
+      });
 
       println!("Done for document - {:?}", document_id);
     }
   }
+
+  let result = collection.bulk_write(bulk_operations, true);
+
+  println!("Updated Buzz Messages - {:?}", result.modified_count);
+
   return true;
 }
+
