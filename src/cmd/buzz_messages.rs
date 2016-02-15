@@ -61,6 +61,6 @@ pub fn run(argv: &[&str]) -> bool {
 
   println!("Updated Buzz Messages - {:?}", result.modified_count);
 
-  return true;
+  true
 }
 

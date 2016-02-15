@@ -1,7 +1,7 @@
 use std::env;
-use std::collections::HashMap;
 
 use mongodb::db::ThreadedDatabase;
+use mongodb::coll::options::WriteModel;
 use bson::oid::ObjectId;
 
 use db;
@@ -23,59 +23,47 @@ pub fn run(argv: &[&str]) -> bool {
   for result in cursor {
     if let Ok(item) = result {
 
-      let document_id = &* item.get_object_id("_id").unwrap().to_string();
+      let product_id = &* item.get_object_id("_id")
+                              .unwrap()
+                              .to_string();
 
-      println!("Starting for document - {:?}", document_id);
+      println!("Starting for document - {:?}", product_id);
 
-      let mut product_images = HashMap::new();
-
-      let logo_image = item.get_document("logo").unwrap();
-
-      let logo_image_id = logo_image.get_object_id("_id")
-                                    .unwrap()
-                                    .to_string();
-
-      let logo_image_name = logo_image.get("file")
-                                      .unwrap()
-                                      .to_string()
-                                      .replace("\"", "");
-
-      product_images.insert(logo_image_id, logo_image_name);
+      let mut bulk_operations = vec![];
 
       for product_image in item.get_array("images").unwrap() {
         let product_image_json = product_image.to_json();
+        let product_oid        = ObjectId::with_string(&*product_id).unwrap();
 
         let image_id = product_image_json.find("_id")
-                                       .unwrap()
-                                       .find("$oid")
-                                       .unwrap()
-                                       .to_string()
-                                       .replace("\"", "");
-
-        let image_name = product_image_json.find("file")
+                                         .unwrap()
+                                         .find("$oid")
                                          .unwrap()
                                          .to_string()
                                          .replace("\"", "");
 
-        product_images.insert(image_id, image_name);
-      }
+        let image_name = product_image_json.find("file")
+                                           .unwrap()
+                                           .to_string()
+                                           .replace("\"", "");
 
-      for (image_id, image_name) in product_images {
         let new_image_name = process(source_name, &*image_id, &*image_name);
+        let image_oid      = ObjectId::with_string(&*image_id).unwrap();
 
-        let record_id = ObjectId::with_string(&*image_id).unwrap();
-
-        collection.update_one(
-          doc! { "_id" => record_id },
-          doc! { "$set" =>  { "logo" => new_image_name } },
-          None
-        ).expect("Failed to update document.");
+        bulk_operations.push(WriteModel::UpdateOne {
+          filter: doc! { "_id" => product_oid, "images" => { "$elemMatch" => { "_id" => image_oid } } },
+          update: doc! { "$set" => { "images.$.file" => new_image_name } },
+          upsert: false
+        });
       }
 
-      println!("Done for document - {:?}", document_id);
+      collection.bulk_write(bulk_operations, true);
+
+      println!("Done for document - {:?}", product_id);
     }
   }
-  return true;
+
+  true
 }
 
 fn process(source_name: &str, image_id: &str, image_name: &str) -> String {

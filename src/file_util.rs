@@ -15,9 +15,6 @@ pub fn create_tmp_dir(source_name: &str, document_id: &str) -> String {
 }
 
 pub fn retrieve_from_source(tmp_file_path: String, source_file_path: String) {
-  println!("tmp_file_path - {:?}", tmp_file_path);
-  println!("source_file_path - {:?}", source_file_path);
-
   match fs::copy(&source_file_path, &tmp_file_path) {
     Err(why) => println!("Copy file failed! {:?}", why.kind()),
     Ok(_) => {}

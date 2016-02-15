@@ -75,7 +75,7 @@ pub fn run(argv: &[&str]) -> bool {
       println!("Done for document - {:?}", document_id);
     }
   }
-  return true;
+  true
 }
 
 fn process(source_name: &str, image_id: &str, image_name: &str) -> String {

@@ -61,5 +61,5 @@ pub fn run(argv: &[&str]) -> bool {
 
   println!("Updated Store locations - {:?}", result.modified_count);
 
-  return true;
+  true
 }
