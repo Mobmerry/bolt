@@ -59,7 +59,7 @@ pub fn run(argv: &[&str]) -> bool {
 
   let result = collection.bulk_write(bulk_operations, true);
 
-  println!("Updated Buzz Messages - {:?}", result.modified_count);
+  println!("Updated Store locations - {:?}", result.modified_count);
 
   return true;
 }

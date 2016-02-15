@@ -61,7 +61,7 @@ Commands:", command_list!());
 #[derive(RustcDecodable)]
 struct Args {
   arg_command: Option<CliCommand>,
-  flag_list: bool,
+  flag_list: bool
 }
 
 fn main() {
@@ -94,13 +94,13 @@ fn main() {
   }
 }
 
-#[derive(Debug, RustcDecodable)]
+#[derive(Debug)]
 enum CliCommand {
-  help,
-  store_locations,
-  stores,
-  products,
-  buzz_messages
+  Help,
+  StoreLocations,
+  Stores,
+  Products,
+  BuzzMessages
 }
 
 impl CliCommand {
@@ -110,11 +110,25 @@ impl CliCommand {
     let argv = &*argv;
 
     match self {
-      CliCommand::help            => { wout!("{}", USAGE); true }
-      CliCommand::store_locations => cmd::store_locations::run(argv),
-      CliCommand::stores          => cmd::stores::run(argv),
-      CliCommand::products        => cmd::products::run(argv),
-      CliCommand::buzz_messages   => cmd::buzz_messages::run(argv)
+      CliCommand::Help           => { wout!("{}", USAGE); true }
+      CliCommand::StoreLocations => cmd::store_locations::run(argv),
+      CliCommand::Stores         => cmd::stores::run(argv),
+      CliCommand::Products       => cmd::products::run(argv),
+      CliCommand::BuzzMessages   => cmd::buzz_messages::run(argv)
     }
+  }
+}
+
+impl rustc_serialize::Decodable for CliCommand {
+  fn decode<D: rustc_serialize::Decoder>(d: &mut D) -> Result<CliCommand, D::Error> {
+    let c = try!(d.read_str());
+    Ok(match &*c {
+      "help"            => CliCommand::Help,
+      "store_locations" => CliCommand::StoreLocations,
+      "stores"          => CliCommand::Stores,
+      "products"        => CliCommand::Products,
+      "buzz_messages"   => CliCommand::BuzzMessages,
+      _                 => { let err = concat!("Installed commands:", command_list!()); return Err(d.error(&*err)); }
+    })
   }
 }
